@@ -188,6 +188,8 @@ class GridData(object):
         @type row:int
         @param index:需要查询Cell中的第几个元素，可以为负值
         @type index:int
+        @return: 返回(column,row)的Cell中index指定的元素
+        @rtype: object
         @raise IndexError:待查询的数据索引超过了当前Grid的界限范围
         """
         return self.__gridData[column][row][index]
@@ -195,13 +197,14 @@ class GridData(object):
     def popItem(self, column, row, index=-1):
         """
         根据(column,row)索引取出指定Cell中index指定的元素
-        @param column:要查询的Cell在x方向的列索引，索引可以为负值
-        @type column:int
-        @param row:要查询的Cell在y方向的行索引，索引可以为负值
-        @type row:int
-        @param index:需要pop出Cell中的第几个元素，可以为负值，默认为-1
-        @type index:int
-        @return:返回(column,row)的Cell中index指定的元素，同时将该元素从Grid中删除
+        @param column: 要查询的Cell在x方向的列索引，索引可以为负值
+        @type column: int
+        @param row: 要查询的Cell在y方向的行索引，索引可以为负值
+        @type row: int
+        @param index: 需要pop出Cell中的第几个元素，可以为负值，默认为-1
+        @type index: int
+        @return: 返回(column,row)的Cell中index指定的元素，同时将该元素从Grid中删除
+        @rtype: object
         @raise IndexError:待查询的数据索引超过了当前Grid的界限范围
         """
         return self.__gridData[column][row].pop(index)
@@ -249,33 +252,41 @@ class GridData(object):
         注意Grid中没有任何元素时至少会保留一个空的Cell
         @return:None
         """
-        while self.countItems(column=0)==0 and self.__width>1:
+        while self.countItems(column=0) == 0 and self.__width > 1:
             # 删除左侧空列
             self.__gridData.pop(0)
-            self.__originX+=self.__pitchX
-            self.__width-=1
-        while self.countItems(column=self.__width-1)==0 and self.__width>1:
+            self.__originX += self.__pitchX
+            self.__width -= 1
+        while self.countItems(column=self.__width-1) == 0 and self.__width > 1:
             # 删除右侧空列
             self.__gridData.pop(-1)
-            self.__width-=1
-        while self.countItems(row=0)==0 and self.__height>1:
+            self.__width -= 1
+        while self.countItems(row=0) == 0 and self.__height > 1:
             # 删除下方空行
             for i in range(self.__width):
                 self.__gridData[i].pop(0)
-            self.__originY+=self.__pitchY
-            self.__height-=1
-        while self.countItems(row=self.__height-1)==0 and self.__height>1:
+            self.__originY += self.__pitchY
+            self.__height -= 1
+        while self.countItems(row=self.__height-1) == 0 and self.__height > 1:
             # 删除上方空行
             for i in range(self.__width):
                 self.__gridData[i].pop(-1)
-            self.__height-=1
+            self.__height -= 1
 
     def showGrid(self):
         print(self.__gridData)
 
 
 def parseNumber(s, length=3, lead_zero=False):
-    """根据数据格式识别文本坐标数据,lead_zero为True时length参数为整数位数，否则为小数位数"""
+    """
+    根据Excellon中的文本坐标数据识别转换为实际坐标值
+    @param length: 数据位数长度，当lead_zero为True时代表整数位数，当lead_zero为False(即trail_zero)时代表小数位数
+    @type length: int
+    @param lead_zero: 设置数据是否为前导零格式，值为Fasle时表示数据为后补零格式，此时length指定了数据的小数位数
+    @type lead_zero: bool
+    @return: 根据文本数据识别出的实际数值
+    @rtype: float
+    """
     s = re.sub(r'(^\s+|\s+$)', '', s)
     if '.' in s:
         return float(s)
@@ -293,33 +304,133 @@ def parseNumber(s, length=3, lead_zero=False):
         v = sign * float(s)/pow(10, length)
     return v
 
+
 def parseBlockXY(s):
-    """解析镭射机加工区块的x,y坐标"""
+    """
+    解析镭射机加工区块的x,y坐标
+    @param s: 三镭射机加工区块指令，如 N1G1X10Y300
+    @type s: str
+    @return: 获取三菱机区块指令中的区块坐标，其中坐标已经转换为象限1(-90度旋转)
+    @rtype: tuple(x,y)
+    """
     regBlock = re.compile(r'N\d+G1X(-?\d+)Y(-?\d+)')
     result = regBlock.match(s)
     if result:
         BlockX, BlockY = result.groups()
-        return (-1*parseNumber(BlockY),parseNumber(BlockX))
+        return (-1*parseNumber(BlockY), parseNumber(BlockX))
 
-def encode(s,encoding='gbk'):
+
+def optimizeBlockOrder(grid, clockwise=True):
+    """
+    将GridData中保存的三菱机区块指令按照从外向内加工路径依次输出的生成器
+    @param grid: 保存三菱机区块数据的GridData对象
+    @param clockwise: 输出区块时是否按顺时针顺序进行输出，值为True时从左下角按顺时针输出，值为False时从右下角按逆时针输出
+    @return :该函数为生成器函数，每次yield一个区块，直至取出所有区块后清空grid中的数据
+    @rtype: None
+    """
+    while grid.countItems() > 0:
+        minX = 0
+        minY = 0
+        maxX = grid.width-1
+        maxY = grid.height-1
+        if maxX == 0 or maxY == 0:
+            # 只有单行和单列时的特殊情况
+            if clockwise:
+                # 正面钻带加工顺序
+                for y in range(maxY+1):
+                    for x in range(maxX+1):
+                        if grid.countItems(x, y) > 0:
+                            yield grid.popItem(x, y, 0)
+            else:
+                # 反面钻带加工顺序
+                for y in range(maxY+1):
+                    for x in range(maxX, -1, -1):
+                        if grid.countItems(x, y) > 0:
+                            yield grid.popItem(x, y, 0)
+        else:
+            if clockwise:
+                # 正面钻带加工顺序
+                for y in range(minY, maxY):
+                    if grid.countItems(minX, y) > 0:
+                        yield grid.popItem(minX, y, 0)
+                for x in range(minX, maxX):
+                    if grid.countItems(x, maxY) > 0:
+                        yield grid.popItem(x, maxY, 0)
+                for y in range(maxY, minY, -1):
+                    if grid.countItems(maxX, y) > 0:
+                        yield grid.popItem(maxX, y, 0)
+                for x in range(maxX, minX, -1):
+                    if grid.countItems(x, minY) > 0:
+                        yield grid.popItem(x, minY, 0)
+            else:
+                # 反面钻带加工顺序
+                for y in range(minY, maxY):
+                    if grid.countItems(maxX, y) > 0:
+                        yield grid.popItem(maxX, y, 0)
+                for x in range(maxX, minX, -1):
+                    if grid.countItems(x, maxY) > 0:
+                        yield grid.popItem(x, maxY, 0)
+                for y in range(maxY, minY, -1):
+                    if grid.countItems(minX, y) > 0:
+                        yield grid.popItem(minX, y, 0)
+                for x in range(minX, maxX):
+                    if grid.countItems(x, minY) > 0:
+                        yield grid.popItem(x, minY, 0)
+        # 清除外围取出数据后的空Cell
+        if grid.countItems(column=0) == 0 and grid.countItems(column=maxX) == 0 and grid.countItems(row=0) == 0 and grid.countItems(row=maxY) == 0:
+            grid.optimizeGrid()
+    grid.delAllItems()
+
+
+def getGlvFileIndex(N, glvFiles):
+    """
+    根据当前区块编号返回区块所在的.glv文件索引
+    @param N: 需要查询所在GLV文件中的区块编号
+    @type N: int
+    @param glvFiles: 保存每个GLV文件启始区块编号的列表，列表的索引编号代表GLV的文件编号，值代表该GLV文件中第一个区块编号
+    @type glvFiles: list
+    @return: 返回区块N所在的GLV文件编号，值为0表示在第一个glv文件，值为1表示在第二个glv文件，依此类推
+    @rtype: int
+    """
+    for i in range(len(glvFiles)-1, -1, -1):
+        if N >= glvFiles[i]:
+            return i
+
+
+def outputBlock(f, gridData, curGlvIndex, glvFiles, isTopSide):
+    """将GridData中的区块按优化后路径保存到文件中"""
+    reBlockN = re.compile(r'N(\d+)G1X-?\d+Y-?\d+')
+    for block in optimizeBlockOrder(grid, isTopSide):
+        N = int(reBlockN.match(block).groups()[0])
+        glvFileIndex = getGlvFileIndex(N, glvFiles)
+        if curGlvIndex != glvFileIndex:
+            curGlvIndex = glvFileIndex
+            f.write('M9'+str(curGlvIndex).zfill(2)+'\n')
+        f.write(block+'\n')
+        f.write('M300\n')
+    return curGlvIndex
+
+
+def encode(s, encoding='gbk'):
     """对于Python2.x需在Windows环境下将文本编码转换为GBK"""
     if sys.version_info[0] == 2:
         return s.encode('gbk')
     else:
         return s
-    
-def checkPrg(isTopSide,prg):
+
+
+def checkPrg(isTopSide, prg):
     """检查镭射钻带是否满足要求"""
     # 判断是否为三菱机加工钻带
-    if prg[0]!='%':
+    if prg[0] != '%':
         print(encode('加工钻带无法识别，请确认是否为三菱机加工钻带。'))
         sys.exit(1)
-    
+
     # 判断是否使用回形加工转换
     if '(BEST DIVISION:SP1_DIV)' not in prg:
         print(encode('请使用SP1_DIV回形加工方法转换钻带!'))
         sys.exit(1)
-        
+
     # 判断扫描区域大小设置是否为30mm*30mm
     if '(Area:X=30.000,Y=30.000)' not in prg:
         print(encode('请使用30mm*30mm扫描区域大小转换钻带!'))
@@ -329,7 +440,7 @@ def checkPrg(isTopSide,prg):
     if isTopSide and '(X MIRROR:ON)' in prg:
         print(encode('正面钻带需关闭X Mirror设置进行转换!'))
         sys.exit(1)
-    
+
     # 判断反面是否有使用X-Mirror转换
     if (not isTopSide) and '(X MIRROR:OFF)' in prg:
         print(encode('反面钻带需使用X Mirror设置进行转换!'))
@@ -339,154 +450,115 @@ def checkPrg(isTopSide,prg):
     if '(Drilling Path Optimized)' in prg:
         print(encode('加工钻带已经优化过加工路径!'))
         sys.exit(1)
-        
-    
-def optimizeBlockOrder(grid,clockwise=True):
-    """将GridData中区块顺序优化为从外向内加工路径的生成器"""
-    while grid.countItems()>0:
-        minX=0
-        minY=0
-        maxX=grid.width-1
-        maxY=grid.height-1
-        if maxX==0 and maxY==0:
-            yield grid.popItem(0,0)
-        else:
-            if clockwise:
-                #正面钻带加工顺序
-                for y in range(minY, maxY):
-                    if grid.countItems(minX,y)>0:
-                        yield grid.popItem(minX,y,0)
-                for x in range(minX, maxX):
-                    if grid.countItems(x,maxY)>0:
-                        yield grid.popItem(x,maxY,0)
-                for y in range(maxY, minY, -1):
-                    if grid.countItems(maxX,y)>0:
-                        yield grid.popItem(maxX,y,0)
-                for x in range(maxX, minX, -1):
-                    if grid.countItems(x,minY)>0:
-                        yield grid.popItem(x,minY,0)
-            else:
-                #反面钻带加工顺序
-                for y in range(minY,maxY):
-                    if grid.countItems(maxX,y)>0:
-                        yield grid.popItem(maxX,y,0)
-                for x in range(maxX,minX,-1):
-                    if grid.countItems(x,maxY)>0:
-                        yield grid.popItem(x,maxY,0)
-                for y in range(maxY,minY,-1):
-                    if grid.countItems(minX,y)>0:
-                        yield grid.popItem(minX,y,0)
-                for x in range(minX,maxX):
-                    if grid.countItems(x,minY)>0:
-                        yield grid.popItem(x,minY,0)
-        # 清除外围取出数据后的空Cell
-        grid.optimizeGrid()
-    grid.delAllItems()
-    raise StopIteration
 
-def getGlvFileIndex(N,glvFiles):
-    """根据当前区块编号返回区块所在的.glv文件索引"""
-    for i in range(len(glvFiles)-1,-1,-1):
-        if N>=glvFiles[i]:
-            return i
-
-def outputBlock(f,gridData,curGlvIndex,glvFiles,isTopSide):
-    """将GridData中的区块按优化后路径保存到文件中"""
-    reBlockN=re.compile(r'N(\d+)G1X-?\d+Y-?\d+')
-    for block in optimizeBlockOrder(grid,isTopSide):
-        N=int(reBlockN.match(block).groups()[0])
-        glvFileIndex=getGlvFileIndex(N,glvFiles)
-        if curGlvIndex!=glvFileIndex:
-            curGlvIndex=glvFileIndex
-            f.write('M9'+str(curGlvIndex).zfill(2)+'\n')
-        f.write(block+'\n')
-        f.write('M300\n')
-    return curGlvIndex
 
 if __name__ == '__main__':
     # 获取钻带文件名
-    if len(sys.argv)>1:
-        filePath=sys.argv[1]
+    if len(sys.argv) > 1:
+        filePath = sys.argv[1]
     else:
-        filePath=input(encode('请输入钻带程序名：'))
-    name,ext=os.path.splitext(filePath)
-    ext='.prg'
-    print(encode('正在优化钻带加工路径:'),name+ext)
+        filePath = input(encode('请输入钻带程序名：'))
+    name, ext = os.path.splitext(filePath)
+    ext = '.prg'
+    if not os.path.isfile(name+ext):
+        print(encode('钻带程序未找到: '+name+ext))
+        sys.exit(1)
 
     # 从钻带文件名中判断钻带的面次
-    isTopSide=re.search(r'lsr(\d\d)(\d\d)',name)
+    isTopSide = re.search(r'lsr(\d\d)(\d\d)', name)
     if isTopSide:
-        isTopSide=isTopSide.groups()
+        isTopSide = isTopSide.groups()
     else:
         print(encode('无法识别钻带面次!'))
         sys.exit(1)
-    if isTopSide[0]<isTopSide[1]:
-        isTopSide=True
+    if isTopSide[0] < isTopSide[1]:
+        isTopSide = True
     else:
-        isTopSide=False
+        isTopSide = False
 
-    # 读取钻带内容并按行保存至prg列表中，删除每行头尾的空字符和换行符
-    prg=[]
+    # 读取钻带内容并按行保存至prg的列表中，删除每行头尾的空字符和换行符
+    prg = []
     with open(name+ext) as f:
         for line in f:
             prg.append(line.strip())
 
-    # 检查钻带是否符合要求
-    checkPrg(isTopSide,prg)
+    # 检查钻带是否符合钻带转换要求
+    checkPrg(isTopSide, prg)
 
-    # 钻带末尾添加路径优化备注
-    prg.insert(-1,'(Drilling Path Optimized)')
+    # 在钻带程式头添加参数
+    flag = True
+    while flag:
+        cond = input(encode('请输入生产板板厚(默认为2mil):'))
+        cond = cond.lower().replace('mil', '').replace('2.0', '2').strip()
+        if not cond:
+            cond = '2'
+        if cond == '2' or cond == '2.3':
+            flag = False
+        else:
+            print(encode('板厚大小不正确！\n'))
+    if isTopSide:
+        cond = r"M100(1st-ldd8um-{0}mil-core-2'4mil)".format(cond)
+    else:
+        cond = r"M100(2nd-ldd8um-{0}mil-core-2'4mil)".format(cond)
+    print(encode('程式头添加参数：'+cond))
+    prg.insert(1, cond)
+
+    # 钻带末尾添加执行路径优化的备注
+    print(encode('正在优化钻带加工路径:'), name+ext)
+    prg.insert(-1, '(Drilling Path Optimized)')
 
     # 重写镭射机加工程序至临时文件中
-    curTool=0
-    curBlock=0
-    curGlvIndex=0
-    glvFiles=[0]
-    grid=GridData(30,30)
-    grid.posParser=parseBlockXY
-    regBlock= re.compile(r'N(\d+)G1X-?\d+Y-?\d+')
-    regTool=re.compile(r'M1(0[1-9]|[1-4]\d|50)')
-    regGlvIndex=re.compile(r'M9(\d\d)')
-    flagIndex=-1
+    curTool = 0                 # 当前区块的刀具编号
+    curBlock = 0                # 当前的区块编号
+    curGlvIndex = 0             # 当前区块所在的GLV文件编号
+    glvFiles = [1]              # 保存每个GLV文件中起始区块编号的列表，处理过程中根据M90x指令自动识别更新
+    grid = GridData(30, 30)     # 按照30mm*30mm的间隔划分每个回形加工路径间隔
+    grid.posParser = parseBlockXY
+    regBlock = re.compile(r'N(\d+)G1X-?\d+Y-?\d+')
+    regTool = re.compile(r'M1(0[1-9]|[1-4]\d|50)')
+    regGlvIndex = re.compile(r'M9(\d\d)')
+    flagIndex = -1
 
-    with open(name+'.tmp','w') as f:
+    with open(name+'.tmp', 'w') as f:
         for line in prg:
             if regTool.match(line):
-                # 刀具切换指令
-                toolNum=int(regTool.match(line).groups()[0])
+                # 识别刀具切换指令
+                toolNum = int(regTool.match(line).groups()[0])
                 # 将T03-T23合并为T02
-                if 2<toolNum<24:
-                    toolNum=2
-                if toolNum!=curTool:
-                    if grid.countItems()>0:
-                        curGlvIndex=outputBlock(f,grid,curGlvIndex,glvFiles,isTopSide)
-                    curTool=toolNum
+                if 2 < toolNum < 24:
+                    toolNum = 2
+                if toolNum != curTool:
+                    if grid.countItems() > 0:
+                        curGlvIndex = outputBlock(
+                            f, grid, curGlvIndex, glvFiles, isTopSide)
+                    curTool = toolNum
                     f.write('M1'+str(curTool).zfill(2)+'\n')
             elif regBlock.match(line):
-                # 区块指令
-                curBlock=int(regBlock.match(line).groups()[0])
+                # 识别区块指令
+                curBlock = int(regBlock.match(line).groups()[0])
                 grid.addItem(line)
                 # 如果前一个指令为Glv切换指令，则更新glv区块文件域值列表
-                if flagIndex>-1:
-                    if curBlock<glvFiles[flagIndex]:
-                        glvFiles[flagIndex]=curBlock
-                    flagIndex=-1
-            elif line=='M300':
-                # 区块加工执行指令，输出优化后区块路径时可以自动添加
+                if flagIndex > -1:
+                    if curBlock < glvFiles[flagIndex]:
+                        glvFiles[flagIndex] = curBlock
+                    flagIndex = -1
+            elif line == 'M300':
+                # 识别区块加工执行指令，输出优化后区块路径时可以自动添加，故删除原M300指令
                 pass
             elif regGlvIndex.match(line):
-                # Glv数据文件切换指令
-                glvIndex=int(regGlvIndex.match(line).groups()[0])
-                while glvIndex>=len(glvFiles):
+                # 识别Glv数据文件切换指令
+                glvIndex = int(regGlvIndex.match(line).groups()[0])
+                while glvIndex >= len(glvFiles):
                     glvFiles.append(999999)
-                flagIndex=glvIndex
+                flagIndex = glvIndex
             else:
-                if grid.countItems()>0:
-                    curGlvIndex=outputBlock(f,grid,curGlvIndex,glvFiles,isTopSide)
+                if grid.countItems() > 0:
+                    curGlvIndex = outputBlock(
+                        f, grid, curGlvIndex, glvFiles, isTopSide)
                 f.write(line+'\n')
 
-    # 将临时钻带替换原始钻带，将原始钻带文件改名为.bak文件
-    os.rename(name+ext,name+'.bak')
-    os.rename(name+'.tmp',name+ext)
-    print(encode('\n钻带优化已经完成!'))
-
+    # 将原始钻带文件备份为.bak文件, 用生成的临时钻带替换原始钻带
+    os.rename(name+ext, name+'.bak')
+    os.rename(name+'.tmp', name+ext)
+    print(encode('\n==== 钻带优化已经完成! ====\n'))
+    
