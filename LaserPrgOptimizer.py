@@ -1,20 +1,25 @@
 ﻿#!/usr/bin/python
 # -*-coding:utf-8-*-
 
-# Compatible with python2 and python3
 from __future__ import print_function
 import sys
 import os
 import re
+import platform
 
-if sys.version_info[0] == 2:
+BLOCK_SIZE = 30                 # 指定转换的扫描区块大小及路径优化时的区块间距大小，单位mm
+
+if 'Windows' in platform.platform():
+    LINE_BREAK = '\n'           # 写入文件时的换行符，Windows系统下设为\n，Linux系统下设为\r\n
+else:
+    LINE_BREAK = '\r\n'
+
+if sys.version_info[0] == 2:    # 针对Python2将默认编码改为utf8
     input = raw_input
     import sys
     reload(sys)
     sys.setdefaultencoding('utf8')
 
-
-# DocString type: epydoc
 
 class GridData(object):
     """根据数据的位置坐标保存二维矩阵数据，所有数据会按照X,Y坐标保存在等间距分隔的Cell单元格中"""
@@ -407,9 +412,9 @@ def outputBlock(f, gridData, curGlvIndex, glvFiles, isTopSide):
         glvFileIndex = getGlvFileIndex(N, glvFiles)
         if curGlvIndex != glvFileIndex:
             curGlvIndex = glvFileIndex
-            f.write('M9'+str(curGlvIndex).zfill(2)+'\n')
-        f.write(block+'\n')
-        f.write('M300\n')
+            f.write('M9'+str(curGlvIndex).zfill(2)+LINE_BREAK)
+        f.write(block+LINE_BREAK)
+        f.write('M300'+LINE_BREAK)
     return curGlvIndex
 
 
@@ -433,9 +438,9 @@ def checkPrg(isTopSide, prg):
         print(encode('请使用SP1_DIV回形加工方法转换钻带!'))
         return False
 
-    # 判断扫描区域大小设置是否为30mm*30mm
-    if '(Area:X=30.000,Y=30.000)' not in prg:
-        print(encode('请使用30mm*30mm扫描区域大小转换钻带!'))
+    # 判断扫描区域大小设置是否正确
+    if '(Area:X={0}.000,Y={0}.000)'.format(str(BLOCK_SIZE)) not in prg:
+        print(encode('请使用{0}mm*{0}mm扫描区域大小转换钻带!'.format(str(BLOCK_SIZE))))
         return False
 
     # 判断正面是否关闭X-Mirror进行转换
@@ -452,126 +457,119 @@ def checkPrg(isTopSide, prg):
     if '(Drilling Path Optimized)' in prg:
         print(encode('加工钻带已经优化过加工路径!'))
         return False
-    
+
     return True
 
+
 if __name__ == '__main__':
-    hasArgv=False
-    if len(sys.argv) > 1:
-        hasArgv=True
+    argvCount = len(sys.argv)
+    if argvCount > 1:
+        # 从第1个参数获取钻带文件名
         filePath = sys.argv[1]
-    while True:
-        # 获取钻带文件名
-        if hasArgv:
-            hasArgv=False
-        else:
-            filePath = input(encode('请输入钻带程序名：'))
-        if not filePath:
-            sys.exit(0)
         name, ext = os.path.splitext(filePath)
         ext = '.prg'
         if not os.path.isfile(name+ext):
-            print(encode('钻带程序未找到: '+name+ext+'\n'))
-            continue
+            print(encode('钻带程序未找到: '+name+ext))
+            sys.exit(1)
 
-        # 从钻带文件名中判断钻带的面次
-        isTopSide = re.search(r'lsr(\d\d)(\d\d)', name)
+        # 从第2个参数获取加工参数
+        if argvCount > 2:
+            cond = sys.argv[2]
+        else:
+            cond = ''
+    else:
+        print(encode('请在运行程序时指定钻带路径!'))
+        sys.exit(1)
+
+    # 从钻带文件名中判断钻带是否为正面钻带
+    isTopSide = re.search(r'lsr(\d\d)(\d\d)', name)
+    if isTopSide:
+        isTopSide = isTopSide.groups()
+    else:
+        print(encode('无法识别钻带面次: '+name+ext))
+        sys.exit(1)
+    if isTopSide[0] < isTopSide[1]:
+        isTopSide = True
+    else:
+        isTopSide = False
+
+    # 读取钻带内容并按行保存至prg的列表中，删除每行头尾的空字符和换行符
+    prg = []
+    with open(name+ext) as f:
+        for line in f:
+            prg.append(line.strip())
+
+    # 检查钻带是否符合钻带转换要求
+    if checkPrg(isTopSide, prg) == False:
+        sys.exit(1)
+
+    # 在钻带程式头添加参数
+    if cond:
         if isTopSide:
-            isTopSide = isTopSide.groups()
+            cond = r"M100(1st-{0})".format(cond)
         else:
-            print(encode('无法识别钻带面次: '+name+ext+'\n'))
-            continue
-        if isTopSide[0] < isTopSide[1]:
-            isTopSide = True
-        else:
-            isTopSide = False
-
-        # 读取钻带内容并按行保存至prg的列表中，删除每行头尾的空字符和换行符
-        prg = []
-        with open(name+ext) as f:
-            for line in f:
-                prg.append(line.strip())
-
-        # 检查钻带是否符合钻带转换要求
-        if checkPrg(isTopSide, prg)==False:
-            print('\n')
-            continue
-
-        # 在钻带程式头添加参数
-        flag = True
-        while flag:
-            cond = input(encode('请输入生产板板厚(默认为2mil):'))
-            cond = cond.lower().replace('mil', '').replace('2.0', '2').strip()
-            if not cond:
-                cond = '2'
-            if cond == '2' or cond == '2.3':
-                flag = False
-            else:
-                print(encode('板厚大小不正确！\n'))
-        if isTopSide:
-            cond = r"M100(1st-ldd8um-{0}mil-core-2'4mil)".format(cond)
-        else:
-            cond = r"M100(2nd-ldd8um-{0}mil-core-2'4mil)".format(cond)
+            cond = r"M100(2nd-{0})".format(cond)
         print(encode('程式头添加参数：'+cond))
         prg.insert(1, cond)
 
-        # 钻带末尾添加执行路径优化的备注
-        print(encode('正在优化钻带加工路径:'), name+ext)
-        prg.insert(-1, '(Drilling Path Optimized)')
+    # 钻带末尾添加已执行路径优化的备注
+    print(encode('正在优化钻带加工路径:'), name+ext)
+    prg.insert(-1, '(Drilling Path Optimized)')
 
-        # 重写镭射机加工程序至临时文件中
-        curTool = 0                 # 当前区块的刀具编号
-        curBlock = 0                # 当前的区块编号
-        curGlvIndex = 0             # 当前区块所在的GLV文件编号
-        if 'M900' in prg:
-            curGlvIndex=-1          # 当钻带中有GLV文件切换指令时才增加切换指令，单个GLV文件不添加M90x指令
-        glvFiles = [1]              # 保存每个GLV文件中起始区块编号的列表，处理过程中根据M90x指令自动识别更新
-        grid = GridData(30, 30)     # 按照30mm*30mm的间隔划分每个回形加工路径间隔
-        grid.posParser = parseBlockXY
-        regBlock = re.compile(r'N(\d+)G1X-?\d+Y-?\d+')
-        regTool = re.compile(r'M1(0[1-9]|[1-4]\d|50)')
-        regGlvIndex = re.compile(r'M9(0\d)')
-        flagIndex = -1
+    # 重写镭射机加工程序至临时文件中
+    curTool = 0                                 # 当前区块的刀具编号
+    curBlock = 0                                # 当前的区块编号
+    curGlvIndex = 0                             # 当前区块所在的GLV文件编号
+    if 'M900' in prg:
+        curGlvIndex = -1                          # 当钻带中有GLV文件切换指令时才增加切换指令，单个GLV文件不添加M90x指令
+    # 保存每个GLV文件中起始区块编号的列表，处理过程中根据M90x指令自动识别更新
+    glvFiles = [1]
+    grid = GridData(BLOCK_SIZE, BLOCK_SIZE)     # 按照指定的大小划分每个回形加工路径之间的间距
+    grid.posParser = parseBlockXY               # 指定区块坐标的解析器
+    regBlock = re.compile(r'N(\d+)G1X-?\d+Y-?\d+')
+    regTool = re.compile(r'M1(0[1-9]|[1-4]\d|50)')
+    regGlvIndex = re.compile(r'M9(0\d)')
+    flagIndex = -1
 
-        with open(name+'.tmp', 'w') as f:
-            for line in prg:
-                if regTool.match(line):
-                    # 识别刀具切换指令
-                    toolNum = int(regTool.match(line).groups()[0])
-                    # 将T03-T23合并为T02
-                    if 2 < toolNum < 24:
-                        toolNum = 2
-                    if toolNum != curTool:
-                        if grid.countItems() > 0:
-                            curGlvIndex = outputBlock(
-                                f, grid, curGlvIndex, glvFiles, isTopSide)
-                        curTool = toolNum
-                        f.write('M1'+str(curTool).zfill(2)+'\n')
-                elif regBlock.match(line):
-                    # 识别区块指令
-                    curBlock = int(regBlock.match(line).groups()[0])
-                    grid.addItem(line)
-                    # 如果前一个指令为Glv切换指令，则更新glv区块文件域值列表
-                    if flagIndex > -1:
-                        if curBlock < glvFiles[flagIndex]:
-                            glvFiles[flagIndex] = curBlock
-                        flagIndex = -1
-                elif line == 'M300':
-                    # 识别区块加工执行指令，输出优化后区块路径时可以自动添加，故删除原M300指令
-                    pass
-                elif regGlvIndex.match(line):
-                    # 识别Glv数据文件切换指令
-                    glvIndex = int(regGlvIndex.match(line).groups()[0])
-                    while glvIndex >= len(glvFiles):
-                        glvFiles.append(999999)
-                    flagIndex = glvIndex
-                else:
+    with open(name+'.tmp', 'w') as f:
+        for line in prg:
+            if regTool.match(line):
+                # 识别刀具切换指令
+                toolNum = int(regTool.match(line).groups()[0])
+                # 将T03-T23合并为T02
+                if 2 < toolNum < 24:
+                    toolNum = 2
+                if toolNum != curTool:
                     if grid.countItems() > 0:
                         curGlvIndex = outputBlock(
                             f, grid, curGlvIndex, glvFiles, isTopSide)
-                    f.write(line+'\n')
+                    curTool = toolNum
+                    f.write('M1'+str(curTool).zfill(2)+LINE_BREAK)
+            elif regBlock.match(line):
+                # 识别区块指令
+                curBlock = int(regBlock.match(line).groups()[0])
+                grid.addItem(line)
+                # 如果前一个指令为Glv切换指令，则更新glv区块文件域值列表
+                if flagIndex > -1:
+                    if curBlock < glvFiles[flagIndex]:
+                        glvFiles[flagIndex] = curBlock
+                    flagIndex = -1
+            elif line == 'M300':
+                # 识别区块加工执行指令，输出优化后区块路径时可以自动添加，故删除原M300指令
+                pass
+            elif regGlvIndex.match(line):
+                # 识别Glv数据文件切换指令
+                glvIndex = int(regGlvIndex.match(line).groups()[0])
+                while glvIndex >= len(glvFiles):
+                    glvFiles.append(999999)
+                flagIndex = glvIndex
+            else:
+                if grid.countItems() > 0:
+                    curGlvIndex = outputBlock(
+                        f, grid, curGlvIndex, glvFiles, isTopSide)
+                f.write(line+LINE_BREAK)
 
-        # 将原始钻带文件备份为.bak文件, 用生成的临时钻带替换原始钻带
-        os.rename(name+ext, name+'.bak')
-        os.rename(name+'.tmp', name+ext)
-        print(encode('\n==== 钻带优化已经完成! ====\n\n'))
+    # 将原始钻带文件备份为.bak文件, 用生成的临时钻带替换原始钻带
+    os.rename(name+ext, name+'.bak')
+    os.rename(name+'.tmp', name+ext)
+    print(encode(LINE_BREAK+'==== 钻带优化已经完成! ===='))
