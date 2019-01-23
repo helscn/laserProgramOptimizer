@@ -6,6 +6,22 @@ import sys
 import os
 import re
 import platform
+if sys.version_info[0] == 3:
+    # 导入Tkinter模块
+    from tkinter import *
+    from tkinter.messagebox import *
+    from tkinter.filedialog import *
+elif sys.version_info[0] == 2:
+    # 针对Python2将默认编码改为utf8
+    import sys
+    reload(sys)
+    sys.setdefaultencoding('utf8')
+    # 导入Tkinter模块
+    from Tkinter import *
+    from tkMessageBox import *
+    from tkFileDialog import *
+else:
+    sys.exit(1)
 
 BLOCK_SIZE = 30                 # 指定转换的扫描区块大小及路径优化时的区块间距大小，单位mm
 
@@ -14,11 +30,10 @@ if 'Windows' in platform.platform():
 else:
     LINE_BREAK = '\r\n'
 
-if sys.version_info[0] == 2:    # 针对Python2将默认编码改为utf8
-    input = raw_input
-    import sys
-    reload(sys)
-    sys.setdefaultencoding('utf8')
+# 隐藏Tk主界面窗口
+root = Tk()
+root.withdraw()
+root.update()
 
 
 class GridData(object):
@@ -159,7 +174,7 @@ class GridData(object):
         """
         根据数据的X，Y坐标计算保存在Grid中的索引位置
         @param data:需要查询Grid中索引位置的数据,其中数据的x,y坐标由posParser解析器解析
-        @return:返回待查询数据在Grid中的索引元组 tuple(column,row)，超出Grid界限时返回 tuple(None,None)
+        @return:返回待查询数据在Grid中的索引元组 tuple(column,row)
         @rtype:tuple(column,row)
         @raise IndexError:待查询的数据索引超过了当前Grid的界限范围
         """
@@ -417,48 +432,123 @@ def outputBlock(f, gridData, curGlvIndex, glvFiles, isTopSide):
         f.write('M300'+LINE_BREAK)
     return curGlvIndex
 
-
-def encode(s, encoding='gbk'):
-    """对于Python2.x需在Windows环境下将文本编码转换为GBK"""
-    if sys.version_info[0] == 2:
-        return s.encode('gbk')
+def formatNum(val, deci=1):
+    """对数字进行四舍五入，对整型数字返回整型值"""
+    val = float(val)
+    if round(val, 0) == round(val, deci):
+        return int(round(val, 0))
     else:
-        return s
+        return round(val, deci)
 
 
-def checkPrg(isTopSide, prg):
-    """检查镭射钻带是否满足要求"""
+def checkPrgSide(filePath):
+    """
+        从钻带文件名中判断钻带是否为正面钻带:
+            正面钻带返回True
+            反面钻带返回False
+            无法判断面次时退出程序
+    """
+    side = re.search(r'lsr(\d\d)(\d\d)', filePath)
+    if side:
+        side = side.groups()
+    else:
+        showerror(title='错误', message='无法判断加工程序面次!')
+        sys.exit(1)
+    if side[0] < side[1]:
+        return True
+    else:
+        return False
+
+
+def checkSourcePrg(filePath):
+    """检查原始镭射钻带是否满足要求，并返回钻带中的板厚及孔径"""
+
+    if not os.path.isfile(name+ext):
+        raise ValueError('钻带程序未找到: '+filePath)
+
+    prg = []
+    coreThick = None
+    viaSize = None
+    with open(filePath) as f:
+        for line in f:
+            line = line.strip()
+            if line == '%':
+                break
+            elif re.search(r'T(\d\d)C(\d+\.?\d*)', line):
+                # 获取刀具直径
+                t, c = re.search(r'T(\d\d)C(\d+\.?\d*)', line).groups()
+                t = int(t)                        # 刀具编号
+                c = formatNum(float(c)/0.0254)    # 刀具直径
+                if 2 <= t <= 20:
+                    if viaSize is None:
+                        viaSize = c
+                    elif viaSize != c:
+                        raise ValueError('原始钻带中有设计多种不同孔径，请确认孔径设计是否有异常！')
+            elif re.search(r'M47,Core_thick:(\d+\.?\d*)mil', line):
+                # 获取板厚大小
+                h, = re.search(r'M47,Core_thick:(\d+\.?\d*)mil', line).groups()
+                h = formatNum(h)
+                if coreThick is None:
+                    coreThick = h
+            elif re.search(r'M47,\*\*Scale X:(\d\.?\d*)\*\*Y:(\d\.?\d*)', line):
+                x, y = re.search(
+                    r'M47,\*\*Scale X:(\d\.?\d*)\*\*Y:(\d\.?\d*)', line).groups()
+                x = formatNum(x, 6)
+                y = formatNum(x, 6)
+                if x == 1 or y == 1:
+                    raise ValueError('原始钻带中的X或Y轴涨缩系数为0，请确认钻带是否有拉伸系数！')
+            prg.append(line)
+
+    # 检查反面钻带是否有添加 VER,4 指令
+    isTopSide = checkPrgSide(filePath)
+    if not isTopSide and 'VER,4' not in prg:
+        raise ValueError('反面钻带程式头没有添加 VER,4 指令！')
+
+    if coreThick is None:
+        raise ValueError('无法获取原始钻带中的板厚数据！')
+    if viaSize is None:
+        raise ValueError('无法获取原始钻带中的孔径数据！')
+    return (coreThick, viaSize)
+
+
+def checkMitsuPrg(filePath, blockSize):
+    """检查三菱镭射钻带是否满足要求"""
+
+    if not os.path.isfile(name+ext):
+        raise ValueError('钻带程序未找到: '+filePath)
+
+    prg = []
+    with open(filePath) as f:
+        for line in f:
+            prg.append(line.strip())
+
     # 判断是否为三菱机加工钻带
     if prg[0] != '%':
-        print(encode('加工钻带无法识别，请确认是否为三菱机加工钻带。'))
-        return False
+        raise ValueError('加工钻带无法识别，请确认是否为三菱机加工钻带!')
 
     # 判断是否使用回形加工转换
     if '(BEST DIVISION:SP1_DIV)' not in prg:
-        print(encode('请使用SP1_DIV回形加工方法转换钻带!'))
-        return False
+        raise ValueError('请使用SP1_DIV回形加工方法转换钻带!')
 
     # 判断扫描区域大小设置是否正确
-    if '(Area:X={0}.000,Y={0}.000)'.format(str(BLOCK_SIZE)) not in prg:
-        print(encode('请使用{0}mm*{0}mm扫描区域大小转换钻带!'.format(str(BLOCK_SIZE))))
-        return False
+    if '(Area:X={0}.000,Y={0}.000)'.format(str(blockSize)) not in prg:
+        raise ValueError('请使用{0}mm*{0}mm扫描区域大小转换钻带!'.format(str(BLOCK_SIZE)))
 
-    # 判断正面是否关闭X-Mirror进行转换
-    if isTopSide and '(X MIRROR:ON)' in prg:
-        print(encode('正面钻带需关闭X Mirror设置进行转换!'))
-        return False
+    # 判断是否打开90 ANGLE进行转换
+    if '(90 ANGLE:OFF)' in prg:
+        raise ValueError('请打开90 ANGLE设置进行钻带转换!')
 
-    # 判断反面是否有使用X-Mirror转换
-    if (not isTopSide) and '(X MIRROR:OFF)' in prg:
-        print(encode('反面钻带需使用X Mirror设置进行转换!'))
-        return False
+    # 判断是否关闭X-Mirror进行转换
+    if '(X MIRROR:ON)' in prg:
+        raise ValueError('请关闭X Mirror设置进行钻带转换!')
+
+    # 判断是否关闭Y-Mirror进行转换
+    if '(Y MIRROR:ON)' in prg:
+        raise ValueError('请关闭Y Mirror设置进行钻带转换!')
 
     # 判断镭射钻带是否已经优化过加工路径
     if '(Drilling Path Optimized)' in prg:
-        print(encode('加工钻带已经优化过加工路径!'))
-        return False
-
-    return True
+        raise ValueError('加工钻带已经优化过加工路径!')
 
 
 if __name__ == '__main__':
@@ -466,32 +556,35 @@ if __name__ == '__main__':
     if argvCount > 1:
         # 从第1个参数获取钻带文件名
         filePath = sys.argv[1]
-        name, ext = os.path.splitext(filePath)
-        ext = '.prg'
-        if not os.path.isfile(name+ext):
-            print(encode('钻带程序未找到: '+name+ext))
+    else:
+        # 从文件选择对话框获取文件名
+        filePath = askopenfilename()
+        if not filePath:
             sys.exit(1)
 
-        # 从第2个参数获取加工参数
-        if argvCount > 2:
-            cond = sys.argv[2]
-        else:
-            cond = ''
-    else:
-        print(encode('请在运行程序时指定钻带路径!'))
+    # 解析文件名及扩展名
+    name, ext = os.path.splitext(filePath)
+    ext = '.prg'
+
+    # 检查原始钻带并获取原始钻带中的板厚、孔径信息
+    try:
+        coreThick, viaSize = checkSourcePrg(name)
+    except ValueError as err:
+        showerror(title='错误', message=err.args[0])
+        sys.exit(1)
+    except IOError as err:
+        showerror(title='错误', message='无法读取原始钻带文件！')
         sys.exit(1)
 
-    # 从钻带文件名中判断钻带是否为正面钻带
-    isTopSide = re.search(r'lsr(\d\d)(\d\d)', name)
-    if isTopSide:
-        isTopSide = isTopSide.groups()
-    else:
-        print(encode('无法识别钻带面次: '+name+ext))
+    # 检查三菱机转换后钻带是否符合要求
+    try:
+        checkMitsuPrg(name+ext, BLOCK_SIZE)
+    except ValueError as err:
+        showerror(title='错误', message=err.args[0])
         sys.exit(1)
-    if isTopSide[0] < isTopSide[1]:
-        isTopSide = True
-    else:
-        isTopSide = False
+    except IOError as err:
+        showerror(title='错误', message='无法读取待转换的.prg钻带文件！')
+        sys.exit(1)
 
     # 读取钻带内容并按行保存至prg的列表中，删除每行头尾的空字符和换行符
     prg = []
@@ -499,21 +592,19 @@ if __name__ == '__main__':
         for line in f:
             prg.append(line.strip())
 
-    # 检查钻带是否符合钻带转换要求
-    if checkPrg(isTopSide, prg) == False:
-        sys.exit(1)
-
     # 在钻带程式头添加参数
-    if cond:
-        if isTopSide:
-            cond = r"M100(1st-{0})".format(cond)
-        else:
-            cond = r"M100(2nd-{0})".format(cond)
-        print(encode('程式头添加参数：'+cond))
-        prg.insert(1, cond)
+    cond = r"ldd8um-{0}mil-core-{1}mil".format(
+        coreThick, viaSize).replace(".", "'")
+    isTopSide = checkPrgSide(name)
+    if isTopSide:
+        # 正面钻带添加参数指令
+        cond = r"M100(1st-{0})".format(cond)
+    else:
+        # 反面钻带添加参数指令
+        cond = r"M100(2nd-{0})".format(cond)
+    prg.insert(1, cond)
 
     # 钻带末尾添加已执行路径优化的备注
-    print(encode('正在优化钻带加工路径:'), name+ext)
     prg.insert(-1, '(Drilling Path Optimized)')
 
     # 重写镭射机加工程序至临时文件中
@@ -521,7 +612,7 @@ if __name__ == '__main__':
     curBlock = 0                                # 当前的区块编号
     curGlvIndex = 0                             # 当前区块所在的GLV文件编号
     if 'M900' in prg:
-        curGlvIndex = -1                          # 当钻带中有GLV文件切换指令时才增加切换指令，单个GLV文件不添加M90x指令
+        curGlvIndex = -1                        # 当钻带中有GLV文件切换指令时才增加切换指令，单个GLV文件不添加M90x指令
     # 保存每个GLV文件中起始区块编号的列表，处理过程中根据M90x指令自动识别更新
     glvFiles = [1]
     grid = GridData(BLOCK_SIZE, BLOCK_SIZE)     # 按照指定的大小划分每个回形加工路径之间的间距
@@ -536,8 +627,8 @@ if __name__ == '__main__':
             if regTool.match(line):
                 # 识别刀具切换指令
                 toolNum = int(regTool.match(line).groups()[0])
-                # 将T03-T23合并为T02
-                if 2 < toolNum < 24:
+                # 将T03-T20合并为T02
+                if 2 < toolNum < 21:
                     toolNum = 2
                 if toolNum != curTool:
                     if grid.countItems() > 0:
@@ -572,4 +663,4 @@ if __name__ == '__main__':
     # 将原始钻带文件备份为.bak文件, 用生成的临时钻带替换原始钻带
     os.rename(name+ext, name+'.bak')
     os.rename(name+'.tmp', name+ext)
-    print(encode(LINE_BREAK+'==== 钻带优化已经完成! ===='))
+    showinfo(title='优化完成', message='以下程序已经完成路径优化并添加参数:\n'+name+ext)
