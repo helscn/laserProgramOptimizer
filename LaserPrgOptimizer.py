@@ -8,18 +8,18 @@ import re
 import platform
 if sys.version_info[0] == 3:
     # 导入Tkinter模块
-    from tkinter import *
-    from tkinter.messagebox import *
-    from tkinter.filedialog import *
+    from tkinter import Tk
+    from tkinter.messagebox import showinfo,showerror
+    from tkinter.filedialog import askopenfilename
 elif sys.version_info[0] == 2:
     # 针对Python2将默认编码改为utf8
     import sys
     reload(sys)
     sys.setdefaultencoding('utf8')
     # 导入Tkinter模块
-    from Tkinter import *
-    from tkMessageBox import *
-    from tkFileDialog import *
+    from Tkinter import Tk
+    from tkMessageBox import showinfo,showerror
+    from tkFileDialog import askopenfilename
 else:
     sys.exit(1)
 
