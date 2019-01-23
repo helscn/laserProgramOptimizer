@@ -432,6 +432,7 @@ def outputBlock(f, gridData, curGlvIndex, glvFiles, isTopSide):
         f.write('M300'+LINE_BREAK)
     return curGlvIndex
 
+
 def formatNum(val, deci=1):
     """对数字进行四舍五入，对整型数字返回整型值"""
     val = float(val)
