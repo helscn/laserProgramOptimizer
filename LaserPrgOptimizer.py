@@ -7,7 +7,7 @@ import os
 import re
 import platform
 if sys.version_info[0] == 3:
-    # 导入Tkinter模块
+    # 导入Python3的Tkinter模块
     from tkinter import Tk
     from tkinter.messagebox import showinfo,showerror
     from tkinter.filedialog import askopenfilename
@@ -16,7 +16,7 @@ elif sys.version_info[0] == 2:
     import sys
     reload(sys)
     sys.setdefaultencoding('utf8')
-    # 导入Tkinter模块
+    # 导入Python2的Tkinter模块
     from Tkinter import Tk
     from tkMessageBox import showinfo,showerror
     from tkFileDialog import askopenfilename
@@ -37,7 +37,12 @@ root.update()
 
 
 class GridData(object):
-    """根据数据的位置坐标保存二维矩阵数据，所有数据会按照X,Y坐标保存在等间距分隔的Cell单元格中"""
+    """
+    二维栅格化矩阵数据类对象，可以根据数据的X,Y坐标将其对应保存在矩阵中等间距分隔的Cell单元格数组中
+    矩阵通过三级嵌套数组保存数据，一级索引为矩阵Cell列X坐标，二级索引为Cell行Y坐标，三级索引为保存在Cell单元格中的数据编号
+    矩阵单元格的间距由创建对象时进行指定，而宽度和高度会根据数据的坐标位置自动扩展
+    扩展后的矩阵的基准Cell(行、列坐标均为零)会平移至所有数据中最小X,最小Y坐标所在的Cell，以保证所有Cell索引编号不小于零
+    """
 
     def __init__(self, pitchX, pitchY):
         """
@@ -98,7 +103,6 @@ class GridData(object):
         @return: 返回数据中(x,y)坐标的元组
         @rtype: tuple(x,y)
         @raise ValueError:无法解析x,y坐标
-
         """
         x = None
         y = None
@@ -123,8 +127,8 @@ class GridData(object):
 
     def addItem(self, data):
         """
-        根据数据的坐标位置添加至对应的Grid表子单元中
-        @param data: 需要增加的数据，其中数据保存时的x,y坐标由创建对象时的xParser,yParser解析器对data解析
+        根据数据的坐标位置添加至对应的Grid表Cell单元中
+        @param data: 需要增加的数据，其中数据保存时的x,y坐标由创建对象时的posParser解析器对data解析
         @return: None
         """
         x, y = self.posParser(data)
@@ -174,7 +178,7 @@ class GridData(object):
         """
         根据数据的X，Y坐标计算保存在Grid中的索引位置
         @param data:需要查询Grid中索引位置的数据,其中数据的x,y坐标由posParser解析器解析
-        @return:返回待查询数据在Grid中的索引元组 tuple(column,row)
+        @return:返回待查询数据在Grid中的索引元组 tuple(column,row)，超出Grid界限时返回 tuple(None,None)
         @rtype:tuple(column,row)
         @raise IndexError:待查询的数据索引超过了当前Grid的界限范围
         """
@@ -268,8 +272,8 @@ class GridData(object):
 
     def optimizeGrid(self):
         """
-        删除Grid边缘区域中不包含任何元素的空行、空列，以减小数据占用空间，注意优化后数据的索引号可能发生变更
-        注意Grid中没有任何元素时至少会保留一个空的Cell
+        删除Grid外围边缘Cell中不包含任何元素的空行、空列，以减小数据占用空间，注意优化后数据的索引号可能发生变更
+        当Grid中没有任何元素时至少会保留一个空的Cell
         @return:None
         """
         while self.countItems(column=0) == 0 and self.__width > 1:
@@ -293,14 +297,11 @@ class GridData(object):
                 self.__gridData[i].pop(-1)
             self.__height -= 1
 
-    def showGrid(self):
-        print(self.__gridData)
-
 
 def parseNumber(s, length=3, lead_zero=False):
     """
-    根据Excellon中的文本坐标数据识别转换为实际坐标值
-    @param s: 需要识别的文件坐标数据
+    根据Excellon指令中的文本坐标数据识别转换为实际坐标值
+    @param s: 需要识别的文本坐标数据
     @type s: str
     @param length: 数据位数长度，当lead_zero为True时代表整数位数，当lead_zero为False(即trail_zero)时代表小数位数
     @type length: int
@@ -309,20 +310,28 @@ def parseNumber(s, length=3, lead_zero=False):
     @return: 根据文本数据识别出的实际数值
     @rtype: float
     """
+
+    # 删除文本头尾的空格
     s = re.sub(r'(^\s+|\s+$)', '', s)
+    # 如果文本中含有小数点直接转换为浮点数
     if '.' in s:
         return float(s)
+    # 判断数据的正负号
     if s[0] == '-':
         sign = -1
         s = s[1:]
     else:
         sign = 1
     if lead_zero:
+        # 识别前导零格式数据，其中length为整数位数
         if len(s) < length:
+            # 当数据位数小于整数位数时根据缺少的位置进行进位
             v = sign * float(s) * pow(10, length-len(s))
         else:
+            # 数据位数大于等于整数位时在整数位后插入小数点
             v = sign * float(s[0:length]+'.'+s[length:])
     else:
+        # 将识别后导零格式数据，其中length为小数位数
         v = sign * float(s)/pow(10, length)
     return v
 
@@ -335,10 +344,12 @@ def parseBlockXY(s):
     @return: 获取三菱机区块指令中的区块坐标，其中坐标已经转换为象限1(-90度旋转)
     @rtype: tuple(x,y)
     """
+    # 识别三菱机区块指令的正则表达式
     regBlock = re.compile(r'N\d+G1X(-?\d+)Y(-?\d+)')
     result = regBlock.match(s)
     if result:
         BlockX, BlockY = result.groups()
+        # 将三菱机区块指令中的坐标转换为象限1(-90度旋转)，并返回转换后的坐标元组
         return (-1*parseNumber(BlockY), parseNumber(BlockX))
 
 
@@ -356,7 +367,7 @@ def optimizeBlockOrder(grid, clockwise=True):
         maxX = grid.width-1
         maxY = grid.height-1
         if maxX == 0 or maxY == 0:
-            # 只有单行和单列时的特殊情况
+            # 判断矩阵只有单行或单列时的特殊情况，只需循环一次行或列
             if clockwise:
                 # 正面钻带加工顺序
                 for y in range(maxY+1):
@@ -370,35 +381,44 @@ def optimizeBlockOrder(grid, clockwise=True):
                         if grid.countItems(x, y) > 0:
                             yield grid.popItem(x, y, 0)
         else:
+            # 当矩阵行和列均大于1时，需要循环一圈yield区块
             if clockwise:
-                # 正面钻带加工顺序
+                # 正面钻带加工顺序为左下角起始的顺时针方向
                 for y in range(minY, maxY):
+                    # 从左下到左上
                     if grid.countItems(minX, y) > 0:
                         yield grid.popItem(minX, y, 0)
                 for x in range(minX, maxX):
+                    # 从左上到右上
                     if grid.countItems(x, maxY) > 0:
                         yield grid.popItem(x, maxY, 0)
                 for y in range(maxY, minY, -1):
+                    # 从右上到右下
                     if grid.countItems(maxX, y) > 0:
                         yield grid.popItem(maxX, y, 0)
                 for x in range(maxX, minX, -1):
+                    # 从右下到左下
                     if grid.countItems(x, minY) > 0:
                         yield grid.popItem(x, minY, 0)
             else:
-                # 反面钻带加工顺序
+                # 反面钻带加工顺序为右下角起始的逆时针方向
                 for y in range(minY, maxY):
+                    # 从右下到右上
                     if grid.countItems(maxX, y) > 0:
                         yield grid.popItem(maxX, y, 0)
                 for x in range(maxX, minX, -1):
+                    # 从右上到左上
                     if grid.countItems(x, maxY) > 0:
                         yield grid.popItem(x, maxY, 0)
                 for y in range(maxY, minY, -1):
+                    # 从左上到左下
                     if grid.countItems(minX, y) > 0:
                         yield grid.popItem(minX, y, 0)
                 for x in range(minX, maxX):
+                    # 从左下到右下
                     if grid.countItems(x, minY) > 0:
                         yield grid.popItem(x, minY, 0)
-        # 清除外围取出数据后的空Cell
+        # 清除外围取出数据后的空Cell，只有矩阵外围四边全部为空Cell时才会删除外围空Cell
         if grid.countItems(column=0) == 0 and grid.countItems(column=maxX) == 0 and grid.countItems(row=0) == 0 and grid.countItems(row=maxY) == 0:
             grid.optimizeGrid()
     grid.delAllItems()
@@ -409,7 +429,7 @@ def getGlvFileIndex(N, glvFiles):
     根据当前区块编号返回区块所在的.glv文件索引
     @param N: 需要查询所在GLV文件中的区块编号
     @type N: int
-    @param glvFiles: 保存每个GLV文件启始区块编号的列表，列表的索引编号代表GLV的文件编号，值代表该GLV文件中第一个区块编号
+    @param glvFiles: 保存每个GLV文件起始区块编号的列表，列表的索引编号代表GLV的文件编号，值代表该GLV文件中第一个区块编号
     @type glvFiles: list
     @return: 返回区块N所在的GLV文件编号，值为0表示在第一个glv文件，值为1表示在第二个glv文件，依此类推
     @rtype: int
@@ -424,7 +444,9 @@ def outputBlock(f, gridData, curGlvIndex, glvFiles, isTopSide):
     reBlockN = re.compile(r'N(\d+)G1X-?\d+Y-?\d+')
     for block in optimizeBlockOrder(grid, isTopSide):
         N = int(reBlockN.match(block).groups()[0])
+        # 获取当前区块所在的GLV文件编号
         glvFileIndex = getGlvFileIndex(N, glvFiles)
+        # 当处理的区块不在当前GLV文件编号中时，增加M90x指令切换GLV数据文件
         if curGlvIndex != glvFileIndex:
             curGlvIndex = glvFileIndex
             f.write('M9'+str(curGlvIndex).zfill(2)+LINE_BREAK)
@@ -476,7 +498,7 @@ def checkSourcePrg(filePath):
             if line == '%':
                 break
             elif re.search(r'T(\d\d)C(\d+\.?\d*)', line):
-                # 获取刀具直径
+                # 获取程式头中的刀具直径，当T2-T20中的刀具直径不相等时抛出异常
                 t, c = re.search(r'T(\d\d)C(\d+\.?\d*)', line).groups()
                 t = int(t)                        # 刀具编号
                 c = formatNum(float(c)/0.0254)    # 刀具直径
@@ -486,12 +508,13 @@ def checkSourcePrg(filePath):
                     elif viaSize != c:
                         raise ValueError('原始钻带中有设计多种不同孔径，请确认孔径设计是否有异常！')
             elif re.search(r'M47,Core_thick:(\d+\.?\d*)mil', line):
-                # 获取板厚大小
+                # 获取程式头备注中的板厚大小
                 h, = re.search(r'M47,Core_thick:(\d+\.?\d*)mil', line).groups()
                 h = formatNum(h)
                 if coreThick is None:
                     coreThick = h
             elif re.search(r'M47,\*\*Scale X:(\d\.?\d*)\*\*Y:(\d\.?\d*)', line):
+                # 获取程式头备注中的涨缩系数信息
                 x, y = re.search(
                     r'M47,\*\*Scale X:(\d\.?\d*)\*\*Y:(\d\.?\d*)', line).groups()
                 x = formatNum(x, 6)
@@ -518,6 +541,7 @@ def checkMitsuPrg(filePath, blockSize):
     if not os.path.isfile(name+ext):
         raise ValueError('钻带程序未找到: '+filePath)
 
+    # 读取程序文件并按行保存到列表中
     prg = []
     with open(filePath) as f:
         for line in f:
@@ -527,7 +551,7 @@ def checkMitsuPrg(filePath, blockSize):
     if prg[0] != '%':
         raise ValueError('加工钻带无法识别，请确认是否为三菱机加工钻带!')
 
-    # 判断是否使用回形加工转换
+    # 判断是否使用回形加工转换，即使没有使用回形加工方法转换也能正常优化路径，此判断逻辑非必需
     if '(BEST DIVISION:SP1_DIV)' not in prg:
         raise ValueError('请使用SP1_DIV回形加工方法转换钻带!')
 
@@ -565,6 +589,7 @@ if __name__ == '__main__':
 
     # 解析文件名及扩展名
     name, ext = os.path.splitext(filePath)
+    # 忽略原文件扩展名，读取扩展名为.prg的程序文件
     ext = '.prg'
 
     # 检查原始钻带并获取原始钻带中的板厚、孔径信息
@@ -608,21 +633,21 @@ if __name__ == '__main__':
     # 钻带末尾添加已执行路径优化的备注
     prg.insert(-1, '(Drilling Path Optimized)')
 
-    # 重写镭射机加工程序至临时文件中
-    curTool = 0                                 # 当前区块的刀具编号
-    curBlock = 0                                # 当前的区块编号
-    curGlvIndex = 0                             # 当前区块所在的GLV文件编号
+    curTool = 0                                     # 当前区块的刀具编号
+    curBlock = 0                                    # 当前的区块编号
+    curGlvIndex = 0                                 # 当前区块所在的GLV文件编号
     if 'M900' in prg:
-        curGlvIndex = -1                        # 当钻带中有GLV文件切换指令时才增加切换指令，单个GLV文件不添加M90x指令
-    # 保存每个GLV文件中起始区块编号的列表，处理过程中根据M90x指令自动识别更新
-    glvFiles = [1]
-    grid = GridData(BLOCK_SIZE, BLOCK_SIZE)     # 按照指定的大小划分每个回形加工路径之间的间距
-    grid.posParser = parseBlockXY               # 指定区块坐标的解析器
-    regBlock = re.compile(r'N(\d+)G1X-?\d+Y-?\d+')
-    regTool = re.compile(r'M1(0[1-9]|[1-4]\d|50)')
-    regGlvIndex = re.compile(r'M9(0\d)')
-    flagIndex = -1
+        curGlvIndex = -1                            # 当钻带中有GLV文件切换指令时才增加切换指令，单个GLV文件不添加M90x指令
+    
+    glvFiles = [1]                                  # 保存每个GLV文件中起始区块编号的列表，钻带读取过程中根据M90x指令自动识别更新此列表
+    grid = GridData(BLOCK_SIZE, BLOCK_SIZE)         # 按照指定的大小划分每个回形加工路径之间的间距
+    grid.posParser = parseBlockXY                   # 指定区块坐标的解析器
+    regBlock = re.compile(r'N(\d+)G1X-?\d+Y-?\d+')  # 识别区块指令的正则表达式
+    regTool = re.compile(r'M1(0[1-9]|[1-4]\d|50)')  # 识别刀具切换指令的正则表达式
+    regGlvIndex = re.compile(r'M9(0\d)')            # 识别GLV数据文件切换指令M90x的正则表达式，通常该指令后第一个区块即为该GLV文件的起始区块编号
+    flagIndex = -1                                  # 当识别到GLV数据文件切换指令时，此标识符会设为指令中对应的GLV文件编号，用于后续自动更新glvFiles列表
 
+    # 重写镭射机加工程序至临时文件中
     with open(name+'.tmp', 'w') as f:
         for line in prg:
             if regTool.match(line):
@@ -632,17 +657,20 @@ if __name__ == '__main__':
                 if 2 < toolNum < 21:
                     toolNum = 2
                 if toolNum != curTool:
+                    # 如果当前刀具编号与之前编号不一致时，将前一把刀中保存的区块按优化后路径写入的临时文件中
                     if grid.countItems() > 0:
                         curGlvIndex = outputBlock(
                             f, grid, curGlvIndex, glvFiles, isTopSide)
+                    # 将新刀具的切换指令写入到文件中，并更新当前刀具编号
                     curTool = toolNum
                     f.write('M1'+str(curTool).zfill(2)+LINE_BREAK)
             elif regBlock.match(line):
                 # 识别区块指令
                 curBlock = int(regBlock.match(line).groups()[0])
                 grid.addItem(line)
-                # 如果前一个指令为Glv切换指令，则更新glv区块文件域值列表
+                # 如果前一个指令为Glv切换指令，则更新glvFiles列表，其中列表索引为GLV文件的编号，值为该GLV文件的起始区块编号
                 if flagIndex > -1:
+                    # 当前区块编号小于列表中保存的起始区块编号时才更新列表
                     if curBlock < glvFiles[flagIndex]:
                         glvFiles[flagIndex] = curBlock
                     flagIndex = -1
@@ -652,10 +680,12 @@ if __name__ == '__main__':
             elif regGlvIndex.match(line):
                 # 识别Glv数据文件切换指令
                 glvIndex = int(regGlvIndex.match(line).groups()[0])
+                # 当GLV文件编号大于glvFiles列表中的索引上限时增加一个临时区块编号至列表中
                 while glvIndex >= len(glvFiles):
                     glvFiles.append(999999)
                 flagIndex = glvIndex
             else:
+                # 识别到未知程序指令时先将之前保存的区块按优化后路径写入临时文件中
                 if grid.countItems() > 0:
                     curGlvIndex = outputBlock(
                         f, grid, curGlvIndex, glvFiles, isTopSide)
