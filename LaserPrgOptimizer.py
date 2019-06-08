@@ -9,7 +9,7 @@ import platform
 if sys.version_info[0] == 3:
     # 导入Python3的Tkinter模块
     from tkinter import Tk
-    from tkinter.messagebox import showinfo,showerror
+    from tkinter.messagebox import showinfo, showerror
     from tkinter.filedialog import askopenfilename
 elif sys.version_info[0] == 2:
     # 针对Python2将默认编码改为utf8
@@ -18,12 +18,12 @@ elif sys.version_info[0] == 2:
     sys.setdefaultencoding('utf8')
     # 导入Python2的Tkinter模块
     from Tkinter import Tk
-    from tkMessageBox import showinfo,showerror
+    from tkMessageBox import showinfo, showerror
     from tkFileDialog import askopenfilename
 else:
     sys.exit(1)
 
-BLOCK_SIZE = 30                 # 指定转换的扫描区块大小及路径优化时的区块间距大小，单位mm
+BLOCK_SIZE = 46                 # 指定转换的扫描区块大小及路径优化时的区块间距大小，单位mm
 
 if 'Windows' in platform.platform():
     LINE_BREAK = '\n'           # 写入文件时的换行符，Windows系统下设为\n，Linux系统下设为\r\n
@@ -353,11 +353,12 @@ def parseBlockXY(s):
         return (-1*parseNumber(BlockY), parseNumber(BlockX))
 
 
-def optimizeBlockOrder(grid, clockwise=True):
+def optimizeBlockOrder(grid, clockwise=True, mirrorX=True):
     """
     将GridData中保存的三菱机区块指令按照从外向内加工路径依次输出的生成器
     @param grid: 保存三菱机区块数据的GridData对象
-    @param clockwise: 输出区块时是否按顺时针顺序进行输出，值为True时从左下角按顺时针输出，值为False时从右下角按逆时针输出
+    @param clockwise: 输出区块时是否按顺时针顺序进行输出，值为True时按顺时针输出，值为False时按逆时针输出
+    @param mirrorX: 反面加工钻带的镜像方式，值为True时按照X轴镜像从右下角开始逆时针输出，值为False时按照Y镜从左上角开始逆时针输出，只有当clockwise为False时生效
     @return :该函数为生成器函数，每次yield一个区块，直至取出所有区块后清空grid中的数据
     @rtype: None
     """
@@ -376,10 +377,18 @@ def optimizeBlockOrder(grid, clockwise=True):
                             yield grid.popItem(x, y, 0)
             else:
                 # 反面钻带加工顺序
-                for y in range(maxY+1):
-                    for x in range(maxX, -1, -1):
-                        if grid.countItems(x, y) > 0:
-                            yield grid.popItem(x, y, 0)
+                if mirrorX:
+                    # 反面使用X轴镜像时
+                    for y in range(maxY+1):
+                        for x in range(maxX, -1, -1):
+                            if grid.countItems(x, y) > 0:
+                                yield grid.popItem(x, y, 0)
+                else:
+                    # 反面使用Y轴镜像时
+                    for y in range(maxY,-1,-1):
+                        for x in range(maxX+1):
+                            if grid.countItems(x, y) > 0:
+                                yield grid.popItem(x, y, 0)
         else:
             # 当矩阵行和列均大于1时，需要循环一圈yield区块
             if clockwise:
@@ -402,22 +411,42 @@ def optimizeBlockOrder(grid, clockwise=True):
                         yield grid.popItem(x, minY, 0)
             else:
                 # 反面钻带加工顺序为右下角起始的逆时针方向
-                for y in range(minY, maxY):
-                    # 从右下到右上
-                    if grid.countItems(maxX, y) > 0:
-                        yield grid.popItem(maxX, y, 0)
-                for x in range(maxX, minX, -1):
-                    # 从右上到左上
-                    if grid.countItems(x, maxY) > 0:
-                        yield grid.popItem(x, maxY, 0)
-                for y in range(maxY, minY, -1):
-                    # 从左上到左下
-                    if grid.countItems(minX, y) > 0:
-                        yield grid.popItem(minX, y, 0)
-                for x in range(minX, maxX):
-                    # 从左下到右下
-                    if grid.countItems(x, minY) > 0:
-                        yield grid.popItem(x, minY, 0)
+                if mirrorX:
+                    # 反面使用X轴镜像时
+                    for y in range(minY, maxY):
+                        # 从右下到右上
+                        if grid.countItems(maxX, y) > 0:
+                            yield grid.popItem(maxX, y, 0)
+                    for x in range(maxX, minX, -1):
+                        # 从右上到左上
+                        if grid.countItems(x, maxY) > 0:
+                            yield grid.popItem(x, maxY, 0)
+                    for y in range(maxY, minY, -1):
+                        # 从左上到左下
+                        if grid.countItems(minX, y) > 0:
+                            yield grid.popItem(minX, y, 0)
+                    for x in range(minX, maxX):
+                        # 从左下到右下
+                        if grid.countItems(x, minY) > 0:
+                            yield grid.popItem(x, minY, 0)
+                else:
+                    # 反面使用Y轴镜像时
+                    for y in range(maxY, minY, -1):
+                        # 从左上到左下
+                        if grid.countItems(minX, y) > 0:
+                            yield grid.popItem(minX, y, 0)
+                    for x in range(minX, maxX):
+                        # 从左下到右下
+                        if grid.countItems(x, minY) > 0:
+                            yield grid.popItem(x, minY, 0)
+                    for y in range(minY, maxY):
+                        # 从右下到右上
+                        if grid.countItems(maxX, y) > 0:
+                            yield grid.popItem(maxX, y, 0)
+                    for x in range(maxX, minX, -1):
+                        # 从右上到左上
+                        if grid.countItems(x, maxY) > 0:
+                            yield grid.popItem(x, maxY, 0)
         # 清除外围取出数据后的空Cell，只有矩阵外围四边全部为空Cell时才会删除外围空Cell
         if grid.countItems(column=0) == 0 and grid.countItems(column=maxX) == 0 and grid.countItems(row=0) == 0 and grid.countItems(row=maxY) == 0:
             grid.optimizeGrid()
@@ -439,10 +468,10 @@ def getGlvFileIndex(N, glvFiles):
             return i
 
 
-def outputBlock(f, gridData, curGlvIndex, glvFiles, isTopSide):
+def outputBlock(f, gridData, curGlvIndex, glvFiles, isTopSide,mirrorX):
     """将GridData中的区块按优化后路径保存到文件中"""
     reBlockN = re.compile(r'N(\d+)G1X-?\d+Y-?\d+')
-    for block in optimizeBlockOrder(grid, isTopSide):
+    for block in optimizeBlockOrder(grid, isTopSide,mirrorX):
         N = int(reBlockN.match(block).groups()[0])
         # 获取当前区块所在的GLV文件编号
         glvFileIndex = getGlvFileIndex(N, glvFiles)
@@ -492,6 +521,7 @@ def checkSourcePrg(filePath):
     prg = []
     coreThick = None
     viaSize = None
+    mirrorX = True
     with open(filePath) as f:
         for line in f:
             line = line.strip()
@@ -523,16 +553,22 @@ def checkSourcePrg(filePath):
                     raise ValueError('原始钻带中的X或Y轴涨缩系数为0，请确认钻带是否有拉伸系数！')
             prg.append(line)
 
-    # 检查反面钻带是否有添加 VER,4 指令
+    # 检查反面钻带是否有添加 VER 指令
     isTopSide = checkPrgSide(filePath)
-    if not isTopSide and 'VER,4' not in prg:
-        raise ValueError('反面钻带程式头没有添加 VER,4 指令！')
+    
+    if not isTopSide:
+        if 'VER,4' in prg:
+            mirrorX=True
+        elif 'VER,7' in prg:
+            mirrorX=False
+        else:
+            raise ValueError('反面钻带程式头没有添加 VER 指令进行镜像！')
 
     if coreThick is None:
         raise ValueError('无法获取原始钻带中的板厚数据！')
     if viaSize is None:
         raise ValueError('无法获取原始钻带中的孔径数据！')
-    return (coreThick, viaSize)
+    return (coreThick, viaSize, mirrorX)
 
 
 def checkMitsuPrg(filePath, blockSize):
@@ -594,7 +630,7 @@ if __name__ == '__main__':
 
     # 检查原始钻带并获取原始钻带中的板厚、孔径信息
     try:
-        coreThick, viaSize = checkSourcePrg(name)
+        coreThick, viaSize, mirrorX = checkSourcePrg(name)
     except ValueError as err:
         showerror(title='错误', message=err.args[0])
         sys.exit(1)
@@ -660,7 +696,7 @@ if __name__ == '__main__':
                     # 如果当前刀具编号与之前编号不一致时，将前一把刀中保存的区块按优化后路径写入的临时文件中
                     if grid.countItems() > 0:
                         curGlvIndex = outputBlock(
-                            f, grid, curGlvIndex, glvFiles, isTopSide)
+                            f, grid, curGlvIndex, glvFiles, isTopSide,mirrorX)
                     # 将新刀具的切换指令写入到文件中，并更新当前刀具编号
                     curTool = toolNum
                     f.write('M1'+str(curTool).zfill(2)+LINE_BREAK)
@@ -688,7 +724,7 @@ if __name__ == '__main__':
                 # 识别到未知程序指令时先将之前保存的区块按优化后路径写入临时文件中
                 if grid.countItems() > 0:
                     curGlvIndex = outputBlock(
-                        f, grid, curGlvIndex, glvFiles, isTopSide)
+                        f, grid, curGlvIndex, glvFiles, isTopSide,mirrorX)
                 f.write(line+LINE_BREAK)
 
     # 将原始钻带文件备份为.bak文件, 用生成的临时钻带替换原始钻带
