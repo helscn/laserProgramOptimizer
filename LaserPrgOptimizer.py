@@ -23,7 +23,7 @@ elif sys.version_info[0] == 2:
 else:
     sys.exit(1)
 
-BLOCK_SIZE = 46                 # 指定转换的扫描区块大小及路径优化时的区块间距大小，单位mm
+BLOCK_SIZE = 30                 # 指定转换的扫描区块大小及路径优化时的区块间距大小，单位mm
 
 if 'Windows' in platform.platform():
     LINE_BREAK = '\n'           # 写入文件时的换行符，Windows系统下设为\n，Linux系统下设为\r\n
