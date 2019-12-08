@@ -574,7 +574,7 @@ def checkSourcePrg(filePath):
 def checkMitsuPrg(filePath, blockSize):
     """检查三菱镭射钻带是否满足要求"""
 
-    if not os.path.isfile(name+ext):
+    if not os.path.isfile(filePath):
         raise ValueError('钻带程序未找到: '+filePath)
 
     # 读取程序文件并按行保存到列表中
