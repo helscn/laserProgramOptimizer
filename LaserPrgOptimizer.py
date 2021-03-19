@@ -23,8 +23,6 @@ elif sys.version_info[0] == 2:
 else:
     sys.exit(1)
 
-BLOCK_SIZE = 30                 # 指定转换的扫描区块大小及路径优化时的区块间距大小，单位mm
-
 if 'Windows' in platform.platform():
     LINE_BREAK = '\n'           # 写入文件时的换行符，Windows系统下设为\n，Linux系统下设为\r\n
 else:
@@ -336,6 +334,21 @@ def parseNumber(s, length=3, lead_zero=False):
     return v
 
 
+def parseMaterialName(s):
+    """
+    解析镭射机原始加工钻带中的参数名，只获取名称中的字母或数字
+    @param s: 镭射机加工钻带中的材料名称
+    @type s: str
+    @return: 返回修饰后的材料名称，只保留字母或数字，字母已转换为大写
+    @rtype: str
+    """
+    material = ''
+    for char in s:
+        if char.isalnum():
+            material += char
+    return material.upper()
+
+
 def parseBlockXY(s):
     """
     解析镭射机加工区块的x,y坐标
@@ -385,7 +398,7 @@ def optimizeBlockOrder(grid, clockwise=True, mirrorX=True):
                                 yield grid.popItem(x, y, 0)
                 else:
                     # 反面使用Y轴镜像时
-                    for y in range(maxY,-1,-1):
+                    for y in range(maxY, -1, -1):
                         for x in range(maxX+1):
                             if grid.countItems(x, y) > 0:
                                 yield grid.popItem(x, y, 0)
@@ -468,10 +481,10 @@ def getGlvFileIndex(N, glvFiles):
             return i
 
 
-def outputBlock(f, gridData, curGlvIndex, glvFiles, isTopSide,mirrorX):
+def outputBlock(f, gridData, curGlvIndex, glvFiles, isTopSide, mirrorX):
     """将GridData中的区块按优化后路径保存到文件中"""
     reBlockN = re.compile(r'N(\d+)G1X-?\d+Y-?\d+')
-    for block in optimizeBlockOrder(grid, isTopSide,mirrorX):
+    for block in optimizeBlockOrder(grid, isTopSide, mirrorX):
         N = int(reBlockN.match(block).groups()[0])
         # 获取当前区块所在的GLV文件编号
         glvFileIndex = getGlvFileIndex(N, glvFiles)
@@ -515,10 +528,11 @@ def checkPrgSide(filePath):
 def checkSourcePrg(filePath):
     """检查原始镭射钻带是否满足要求，并返回钻带中的板厚及孔径"""
 
-    if not os.path.isfile(name+ext):
+    if not os.path.isfile(filePath):
         raise ValueError('钻带程序未找到: '+filePath)
 
     prg = []
+    material = None
     coreThick = None
     viaSize = None
     mirrorX = True
@@ -537,6 +551,12 @@ def checkSourcePrg(filePath):
                         viaSize = c
                     elif viaSize != c:
                         raise ValueError('原始钻带中有设计多种不同孔径，请确认孔径设计是否有异常！')
+            elif re.search(r'M47,Material:(.+)', line):
+                # 获取程式头备注中的材料名称
+                m, = re.search(r'M47,Material:(.+)', line).groups()
+                m = parseMaterialName(m)
+                if m and material is None:
+                    material = m
             elif re.search(r'M47,Core_thick:(\d+\.?\d*)mil', line):
                 # 获取程式头备注中的板厚大小
                 h, = re.search(r'M47,Core_thick:(\d+\.?\d*)mil', line).groups()
@@ -555,12 +575,12 @@ def checkSourcePrg(filePath):
 
     # 检查反面钻带是否有添加 VER 指令
     isTopSide = checkPrgSide(filePath)
-    
+
     if not isTopSide:
         if 'VER,4' in prg:
-            mirrorX=True
+            mirrorX = True
         elif 'VER,7' in prg:
-            mirrorX=False
+            mirrorX = False
         else:
             raise ValueError('反面钻带程式头没有添加 VER 指令进行镜像！')
 
@@ -568,19 +588,26 @@ def checkSourcePrg(filePath):
         raise ValueError('无法获取原始钻带中的板厚数据！')
     if viaSize is None:
         raise ValueError('无法获取原始钻带中的孔径数据！')
-    return (coreThick, viaSize, mirrorX)
+    return (material, coreThick, viaSize, mirrorX)
 
 
-def checkMitsuPrg(filePath, blockSize):
-    """检查三菱镭射钻带是否满足要求"""
+def checkMitsuPrg(filePath):
+    """检查三菱镭射钻带是否满足要求，并返回扫描区域大小"""
 
     if not os.path.isfile(filePath):
         raise ValueError('钻带程序未找到: '+filePath)
 
-    # 读取程序文件并按行保存到列表中
+    # 读取程序文件并按行保存到列表中，并获取转换时的扫描区块大小
+    regBlockSize = re.compile(r'\(Area:X=(\d+\.?\d+),Y=(\d+\.?\d+)\)')
     prg = []
     with open(filePath) as f:
         for line in f:
+            s = line.strip()
+            result = regBlockSize.match(s)
+            if result:
+                BLOCK_SIZE_X, BLOCK_SIZE_Y = result.groups()
+                BLOCK_SIZE_X, BLOCK_SIZE_Y = float(
+                    BLOCK_SIZE_X), float(BLOCK_SIZE_Y)
             prg.append(line.strip())
 
     # 判断是否为三菱机加工钻带
@@ -589,11 +616,8 @@ def checkMitsuPrg(filePath, blockSize):
 
     # 判断是否使用回形加工转换，即使没有使用回形加工方法转换也能正常优化路径，此判断逻辑非必需
     if '(BEST DIVISION:SP1_DIV)' not in prg:
-        raise ValueError('请使用SP1_DIV回形加工方法转换钻带!')
-
-    # 判断扫描区域大小设置是否正确
-    if '(Area:X={0}.000,Y={0}.000)'.format(str(blockSize)) not in prg:
-        raise ValueError('请使用{0}mm*{0}mm扫描区域大小转换钻带!'.format(str(BLOCK_SIZE)))
+        # raise ValueError('请使用SP1_DIV回形加工方法转换钻带!')
+        showinfo(title='提示', message='原程序没有使用 SP1_DIV 回形加工方法转换钻带，\n将无法获得最佳的路径优化效果!')
 
     # 判断是否打开90 ANGLE进行转换
     if '(90 ANGLE:OFF)' in prg:
@@ -611,8 +635,11 @@ def checkMitsuPrg(filePath, blockSize):
     if '(Drilling Path Optimized)' in prg:
         raise ValueError('加工钻带已经优化过加工路径!')
 
+    return BLOCK_SIZE_X, BLOCK_SIZE_Y
+
 
 if __name__ == '__main__':
+    # 获取加工钻带的路径
     argvCount = len(sys.argv)
     if argvCount > 1:
         # 从第1个参数获取钻带文件名
@@ -630,7 +657,7 @@ if __name__ == '__main__':
 
     # 检查原始钻带并获取原始钻带中的板厚、孔径信息
     try:
-        coreThick, viaSize, mirrorX = checkSourcePrg(name)
+        material, coreThick, viaSize, mirrorX = checkSourcePrg(name)
     except ValueError as err:
         showerror(title='错误', message=err.args[0])
         sys.exit(1)
@@ -640,12 +667,12 @@ if __name__ == '__main__':
 
     # 检查三菱机转换后钻带是否符合要求
     try:
-        checkMitsuPrg(name+ext, BLOCK_SIZE)
-    except ValueError as err:
-        showerror(title='错误', message=err.args[0])
-        sys.exit(1)
+        BLOCK_SIZE_X, BLOCK_SIZE_Y = checkMitsuPrg(name+ext)
     except IOError as err:
         showerror(title='错误', message='无法读取待转换的.prg钻带文件！')
+        sys.exit(1)
+    except Exception as err:
+        showerror(title='错误', message=err.args[0])
         sys.exit(1)
 
     # 读取钻带内容并按行保存至prg的列表中，删除每行头尾的空字符和换行符
@@ -657,6 +684,8 @@ if __name__ == '__main__':
     # 在钻带程式头添加参数
     cond = r"ldd8um-{0}mil-core-{1}mil".format(
         coreThick, viaSize).replace(".", "'")
+    if material:
+        cond = r"{0}-{1}".format(material, cond)
     isTopSide = checkPrgSide(name)
     if isTopSide:
         # 正面钻带添加参数指令
@@ -674,14 +703,18 @@ if __name__ == '__main__':
     curGlvIndex = 0                                 # 当前区块所在的GLV文件编号
     if 'M900' in prg:
         curGlvIndex = -1                            # 当钻带中有GLV文件切换指令时才增加切换指令，单个GLV文件不添加M90x指令
-    
-    glvFiles = [1]                                  # 保存每个GLV文件中起始区块编号的列表，钻带读取过程中根据M90x指令自动识别更新此列表
-    grid = GridData(BLOCK_SIZE, BLOCK_SIZE)         # 按照指定的大小划分每个回形加工路径之间的间距
+
+    # 保存每个GLV文件中起始区块编号的列表，钻带读取过程中根据M90x指令自动识别更新此列表
+    glvFiles = [1]
+    # 按照指定的大小划分每个回形加工路径之间的间距
+    grid = GridData(BLOCK_SIZE_X, BLOCK_SIZE_Y)
     grid.posParser = parseBlockXY                   # 指定区块坐标的解析器
     regBlock = re.compile(r'N(\d+)G1X-?\d+Y-?\d+')  # 识别区块指令的正则表达式
     regTool = re.compile(r'M1(0[1-9]|[1-4]\d|50)')  # 识别刀具切换指令的正则表达式
-    regGlvIndex = re.compile(r'M9(0\d)')            # 识别GLV数据文件切换指令M90x的正则表达式，通常该指令后第一个区块即为该GLV文件的起始区块编号
-    flagIndex = -1                                  # 当识别到GLV数据文件切换指令时，此标识符会设为指令中对应的GLV文件编号，用于后续自动更新glvFiles列表
+    # 识别GLV数据文件切换指令M90x的正则表达式，通常该指令后第一个区块即为该GLV文件的起始区块编号
+    regGlvIndex = re.compile(r'M9(0\d)')
+    # 当识别到GLV数据文件切换指令时，此标识符会设为指令中对应的GLV文件编号，用于后续自动更新glvFiles列表
+    flagIndex = -1
 
     # 重写镭射机加工程序至临时文件中
     with open(name+'.tmp', 'w') as f:
@@ -696,7 +729,7 @@ if __name__ == '__main__':
                     # 如果当前刀具编号与之前编号不一致时，将前一把刀中保存的区块按优化后路径写入的临时文件中
                     if grid.countItems() > 0:
                         curGlvIndex = outputBlock(
-                            f, grid, curGlvIndex, glvFiles, isTopSide,mirrorX)
+                            f, grid, curGlvIndex, glvFiles, isTopSide, mirrorX)
                     # 将新刀具的切换指令写入到文件中，并更新当前刀具编号
                     curTool = toolNum
                     f.write('M1'+str(curTool).zfill(2)+LINE_BREAK)
@@ -724,10 +757,11 @@ if __name__ == '__main__':
                 # 识别到未知程序指令时先将之前保存的区块按优化后路径写入临时文件中
                 if grid.countItems() > 0:
                     curGlvIndex = outputBlock(
-                        f, grid, curGlvIndex, glvFiles, isTopSide,mirrorX)
+                        f, grid, curGlvIndex, glvFiles, isTopSide, mirrorX)
                 f.write(line+LINE_BREAK)
 
     # 将原始钻带文件备份为.bak文件, 用生成的临时钻带替换原始钻带
     os.rename(name+ext, name+'.bak')
     os.rename(name+'.tmp', name+ext)
-    showinfo(title='优化完成', message='以下程序已经完成路径优化并添加参数:\n'+name+ext)
+    showinfo(title='优化完成', message='程序已按 [{}mm*{}mm] 区块大小完成路径优化并添加加工参数:\n{}'.format(
+        BLOCK_SIZE_X, BLOCK_SIZE_Y, name+ext))
